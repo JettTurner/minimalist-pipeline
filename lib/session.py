@@ -75,12 +75,14 @@ def get_backup_filepath() -> Path:
 
 
 def save_project_data(prefs) -> bool:
-    """Persist opened projects list to backup JSON."""
+    """Persist opened projects list (and user_name -- see NOTES.md, "Addon
+    register()") to backup JSON."""
     data = {
         "active_project_root": prefs.active_project_root,
         "opened_projects": [
             {"name": item.name, "path": item.path} for item in prefs.opened_projects
         ],
+        "user_name": prefs.user_name,
     }
     filepath = get_backup_filepath()
     filepath.parent.mkdir(parents=True, exist_ok=True)
@@ -96,7 +98,9 @@ def save_project_data(prefs) -> bool:
 
 
 def load_project_data(prefs) -> bool:
-    """Restore opened projects list from backup JSON."""
+    """Restore opened projects list from backup JSON, and user_name if
+    Blender's own AddonPreferences storage came back empty -- see NOTES.md,
+    "Addon register()"."""
     filepath = get_backup_filepath()
     if not filepath.exists():
         raise PipelineError("Backup file not found.", level="WARNING")
@@ -112,6 +116,10 @@ def load_project_data(prefs) -> bool:
                 new_item = prefs.opened_projects.add()
                 new_item.name = item_data.get("name", "unknown")
                 new_item.path = item_data.get("path", "")
+
+            # Backup is a fallback only -- don't overrule a live value.
+            if not prefs.user_name and data.get("user_name"):
+                prefs.user_name = data["user_name"]
 
             log("INFO", "backup", "Project data loaded.")
             return True

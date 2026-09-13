@@ -42,6 +42,7 @@ from .config import (
     get_config_filepath,
     parse_camera_name,
     parse_filename,
+    parse_timeline,
     prefix_to_parent_folder,
     read_project_config,
     sanitize_name,
@@ -72,6 +73,7 @@ from .core import (
 )
 from .creation import (
     DEFAULT_ASSET_DEPARTMENTS,
+    DEFAULT_MULTISHOT_STEP,
     DEFAULT_SHOT_DEPARTMENTS,
     create_asset_file,
     create_shot_file,

@@ -84,7 +84,7 @@ Routing logic: `prefix_to_parent_folder()` in `lib/config.py`. All paths resolve
 ```json
 {
   "project_name": "my_project",
-  "pipeline_addon_version": "1.0.3",
+  "pipeline_addon_version": "1.0.4",
   "blender_version": "(4, 0, 0)",
   "resolution": {"x": 1920, "y": 1080},
   "default_fps": 30,
@@ -250,7 +250,9 @@ The red text itself is a plain `row.label()`, not the button opening the menu: a
 ### Creation (`creation.py`)
 - `create_asset_file(project_root, *, prefix, name, departments=None, description="")` — folder/version resolution, preset, save, tracking init
 - `create_shot_file(project_root, *, sequence_number, shot_number, departments=None, description="", timeline=None, start_version=None)` — `shot_number` is an `int` (mono-shot) or `list[int]` (multishot block, no separate code path — `format_shot_segment()` handles both); `timeline` is `[start_0, ..., end]`, `None` defaults to `[default_frame_start]`; `start_version` is a floor for the version number, used by the branch operation (§5) to continue a lineage instead of restarting at v001
-- `resolve_timeline(*, frame_start=None, frame_end=None, frame_duration=None, config=None)` — turns the CSV batch's loose, independently-optional frame columns into a `create_shot_file()`-ready `timeline`; the only caller that still needs the loose form (the interactive multishot dialog builds its own `timeline` directly from per-shot start frames)
+- `resolve_timeline(*, frame_start=None, frame_end=None, frame_duration=None, shot_count=1, config=None)` — turns the CSV batch's loose, independently-optional frame columns into a `create_shot_file()`-ready `timeline`; the only caller that still needs the loose form (the interactive multishot dialog builds its own `timeline` directly from per-shot start frames). `shot_count` > 1 (a CSV multi-shot row) spreads shots evenly across `[frame_start, end]` (`end` from `frame_end`/`frame_duration` if given, else defaulted from `DEFAULT_MULTISHOT_STEP`) — never past an explicit `frame_end`
+- `DEFAULT_MULTISHOT_STEP` (`creation.py`) — shared default per-shot spacing (20 frames) used when a CSV multi-shot row gives no `frame_end`/`frame_duration` to derive the span from instead; same default the interactive multishot dialog's own "add row" uses (`operators/shot_ops.py`)
+- `parse_timeline(raw)` (`config.py`) — parses a CSV row's `timeline` column (e.g. `"1001-1021-1051-1076"`) straight into a `create_shot_file()`-ready `timeline`, bypassing `resolve_timeline()`'s auto-spread for exact per-shot control. Not to be confused with the farm's own, unrelated `overrided_frame_range`/`resolved_frame_range` (`operators/farm_ops.py`, `farm/dispatch.py`)
 
 ### Tracking (`tracking.py`)
 - `TrackingStatusCache` — per-asset cache of computed status, invalidated on `.pipeline/`'s mtime; `.get()` never raises (read by `draw()`/enum callbacks with no way to report an error); `.get_all()` filters out archived blocks (§5)

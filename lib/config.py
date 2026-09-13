@@ -248,6 +248,13 @@ def shots_in_segment(shot_segment: str) -> list[int]:
     return [int(n) for n in shot_segment.split("-")]
 
 
+def parse_timeline(raw: str) -> list[int]:
+    """Parse a CSV row's dash-joined explicit 'timeline' column
+    ("1001-1021-1051-1076") into absolute frame numbers, in order -- see
+    NOTES.md, "CSV batch: multi-shot rows"."""
+    return [int(n) for n in raw.split("-")]
+
+
 def parse_camera_name(
     camera_name: str, sequence_label: str, config: dict | None = None
 ) -> int | None:

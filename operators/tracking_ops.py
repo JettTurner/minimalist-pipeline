@@ -387,7 +387,13 @@ class M_PIPELINE_OT_edit_entry(bpy.types.Operator):
             if e["id"] == self.id:
                 self.type = e["type"]
                 self.text = e["text"]
-                self.department = e.get("department") or "NONE"
+                # Stored department may no longer be among this project's
+                # configured departments (renamed/removed since, or stale
+                # data) -- fall back to "NONE" rather than crashing invoke().
+                try:
+                    self.department = e.get("department") or "NONE"
+                except TypeError:
+                    self.department = "NONE"
                 # Stored "shot" may predate this being an enum (free text
                 # back then, not validated) -- only keep it if it's still a
                 # valid choice for this exact file (same digit width, still

@@ -54,7 +54,8 @@ La variante multishot d'un shot (plusieurs cuts dans un seul fichier) étend ce 
 De nouveaux assets/shots peuvent aussi être créés en masse depuis un fichier CSV (bouton "Batch create from CSV" du panneau Projet, ou menu top bar). Chaque ligne est construite dans son propre process Blender headless jetable — jamais la session courante — donc rien ne s'accumule entre les lignes (pas de collections résiduelles d'une ligne précédente) et le travail en cours de l'artiste n'est jamais réinitialisé ni touché. Les lignes sont traitées strictement une par une, jamais en parallèle.
 
 - **Assets** : `prefix`, `name` obligatoires ; `departments`, `description` optionnels.
-- **Shots** : `sequence`, `shot` obligatoires ; `frame_start`/`frame_end`/`frame_duration`, `departments`, `description` optionnels (`frame_end` prend le pas sur `frame_duration` si les deux sont donnés ; si aucun des deux n'est donné, le frame range par défaut de la scène n'est pas touché).
+- **Shots** : `sequence`, `shot` obligatoires ; `frame_start`/`frame_end`/`frame_duration`/`timeline`, `departments`, `description` optionnels. `shot` peut aussi être un bloc joint par des tirets (ex. `"030-035-040"`, dans n'importe quel ordre, n'importe quel padding — `"3-10-020"` est tout aussi valide) pour créer un multi-shot en une seule ligne — ses shots sont alors répartis uniformément dans le bloc au lieu de tomber sur une seule et même frame.
+  - **Priorité si plusieurs colonnes de frame sont remplies** (seule la première qui s'applique est utilisée, les autres sont ignorées pour cette ligne) : `timeline` (exacte, ex. `"1001-1021-1051-1076"` — un départ par shot plus la fin du bloc) > `frame_end` > `frame_duration` > `frame_start` seul (`default_frame_start` du projet si même celui-ci est vide). `frame_end`/`frame_duration` fixent la fin du bloc pour la répartition automatique ; sans les deux, elle vaut par défaut 20 frames par shot après `frame_start` — sans jamais dépasser un `frame_end` explicite.
 - `departments` : noms de départements séparés par des virgules. Retombe sur l'ensemble par défaut du projet si la colonne est vide/absente ; tout nom absent des départements réellement configurés dans le projet est ignoré et loggé en warning — ne bloque jamais la ligne.
 - Une ligne correspondant à un asset/shot déjà existant (même prefix+name, ou même sequence+shot) est silencieusement ignorée — la création en masse n'écrase jamais rien.
 
@@ -67,7 +68,7 @@ De nouveaux assets/shots peuvent aussi être créés en masse depuis un fichier 
 ```json
 {
   "project_name": "my_project",
-  "pipeline_addon_version": "1.0.3",
+  "pipeline_addon_version": "1.0.4",
   "blender_version": "(4, 2, 0)",
   "resolution": {"x": 1920, "y": 1080},
   "default_fps": 30,

@@ -11,6 +11,7 @@ from ..lib import (
     ConfigCache,
     PipelineError,
     asset_batch_exists,
+    format_shot_segment,
     get_active_project_root,
     launch_batch_create_entry,
     log,
@@ -20,6 +21,7 @@ from ..lib import (
     region_char_budget,
     sanitize_name,
     shot_batch_exists,
+    shots_in_segment,
     text_to_lines,
 )
 
@@ -75,7 +77,13 @@ class M_PIPELINE_OT_batch_create(bpy.types.Operator):
             text = "Columns: prefix (required), name (required), departments (optional), description (optional)."
 
         else:
-            text = "Columns: sequence (required), shot (required), frame_start / frame_end / frame_duration (optional), departments (optional), description (optional)."
+            text = "Columns: sequence (required), shot (required), frame_start / frame_end / frame_duration / timeline (optional), departments (optional), description (optional)."
+            text += (
+                '\nshot: a single number, or dash-joined for a multi-shot block '
+                '("030-035-040"). Frame priority if several are filled in: '
+                'timeline (exact, e.g. "1001-1021-1076") > frame_end > '
+                "frame_duration > frame_start alone."
+            )
 
         text = f"{text}\ndepartments: comma-separated. \nunknown names are skipped (logged, omit for the project's defaults).\nrows matching an existing asset/shot are skipped."
         for idx, p in enumerate(text.split("\n")):
@@ -144,7 +152,8 @@ class M_PIPELINE_OT_batch_create(bpy.types.Operator):
                     if not sequence or not shot:
                         raise ValueError("sequence/shot missing")
                     sq = f"{naming['sequence']['prefix']}{int(sequence):0{naming['sequence']['digits']}d}"
-                    sh = f"{naming['shot']['prefix']}{int(shot):0{naming['shot']['digits']}d}"
+                    # "shot" may be a dash-joined block -- see NOTES.md.
+                    sh = f"{naming['shot']['prefix']}{format_shot_segment(shots_in_segment(shot), config)}"
                     label = f"{sq}_{sh}"
                     if label in seen:
                         raise ValueError("duplicate row in this CSV")

@@ -27,6 +27,10 @@ from .tracking import create_tracking, create_wipmeta
 DEFAULT_ASSET_DEPARTMENTS = ["modeling", "rigging", "texturing"]
 DEFAULT_SHOT_DEPARTMENTS = ["layout", "animation", "lighting", "render"]
 
+# Default per-shot spacing for a multi-shot block with no frame_end/
+# frame_duration -- also shot_ops.py's own "add row" default.
+DEFAULT_MULTISHOT_STEP = 20
+
 
 def create_asset_file(
     project_root: Path,
@@ -86,11 +90,14 @@ def resolve_timeline(
     frame_start: int | None = None,
     frame_end: int | None = None,
     frame_duration: int | None = None,
+    shot_count: int = 1,
     config: dict | None = None,
 ) -> list[int]:
     """Loose frame_start/frame_end/frame_duration -> a create_shot_file()
     timeline. frame_start defaults to config's default_frame_start;
-    frame_end takes precedence over frame_duration."""
+    frame_end takes precedence over frame_duration. shot_count > 1 spreads
+    shots evenly across [frame_start, end], never past an explicit
+    frame_end -- see NOTES.md, "CSV batch: multi-shot rows"."""
     config = config if config is not None else ConfigCache.get()
     start = (
         frame_start
@@ -98,10 +105,20 @@ def resolve_timeline(
         else json_get(config, "default_frame_start", 1001)
     )
     if frame_end is not None:
-        return [start, frame_end]
-    if frame_duration is not None:
-        return [start, start + frame_duration - 1]
-    return [start]
+        end = frame_end
+    elif frame_duration is not None:
+        end = start + frame_duration - 1
+    elif shot_count > 1:
+        end = start + DEFAULT_MULTISHOT_STEP * shot_count
+    else:
+        return [start]
+
+    if shot_count <= 1:
+        return [start, end]
+
+    # Step from the actual span, not the constant -- see NOTES.md.
+    step = max(1, (end - start) // shot_count)
+    return [start + i * step for i in range(shot_count)] + [end]
 
 
 def create_shot_file(

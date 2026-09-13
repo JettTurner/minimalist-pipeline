@@ -5,6 +5,7 @@ from pathlib import Path
 import bpy
 
 from ..lib import (
+    DEFAULT_MULTISHOT_STEP,
     ConfigCache,
     PipelineError,
     active_shot_owners,
@@ -62,6 +63,12 @@ class M_PIPELINE_OT_remove_multishot_item(bpy.types.Operator):
 
     index: bpy.props.IntProperty(name="")
 
+    @classmethod
+    def poll(cls, context):
+        # The last remaining row must stay -- see NOTES.md, "Multishot row
+        # list: disabling a button isn't a guard".
+        return len(context.window_manager.shots_list_creation) > 1
+
     def execute(self, context):
         shots = context.window_manager.shots_list_creation
         shots.remove(self.index)
@@ -104,7 +111,7 @@ def _draw_shot_list(layout, context, op, config, TITLE_WIDTH):
 
         add_op = btns_row.operator("m_pipeline.add_multishot_item", icon="ADD", text="")
         add_op.shot_number = last.shot_number + 10
-        add_op.start_frame = last.start_frame + 20
+        add_op.start_frame = last.start_frame + DEFAULT_MULTISHOT_STEP
 
     else:
         tabl.operator(
@@ -158,9 +165,7 @@ def _draw_timeline_warnings(layout, shots, end_frame, context):
     warning = layout.column(align=True)
     warning.alert = True
     if numbers != sorted(set(numbers)) or timeline != sorted(set(timeline)):
-        text = (
-            "Inconsistent timeline ! Shot numbers or start frames are not ordered.",
-        )
+        text = "Inconsistent timeline ! Shot numbers or start frames are not ordered."
         text_to_lines(
             warning.box(),
             text=text,
@@ -414,6 +419,11 @@ class M_PIPELINE_OT_create_shot(bpy.types.Operator):
                 )
                 return {"CANCELLED"}
 
+        # Snapshot before create_clean's read_homefile() below -- see
+        # NOTES.md, "Multishot row list: a clean-scene reset invalidates it".
+        shot_numbers = [s.shot_number for s in shots]
+        shot_starts = [s.start_frame for s in shots]
+
         try:
             # create_clean starts from a blank scene; otherwise the file is
             # created from whatever is currently in this session (the
@@ -427,8 +437,8 @@ class M_PIPELINE_OT_create_shot(bpy.types.Operator):
             dest_path = create_shot_file(
                 project_root,
                 sequence_number=self.sequence_number,
-                shot_number=[s.shot_number for s in shots],
-                timeline=[s.start_frame for s in shots] + [self.end_frame],
+                shot_number=shot_numbers,
+                timeline=shot_starts + [self.end_frame],
                 departments=list(self.required_departments),
                 description=self.description,
             )
@@ -568,6 +578,13 @@ class M_PIPELINE_OT_edit_block_structure(bpy.types.Operator):
             return {"CANCELLED"}
 
         shots = context.window_manager.shots_list_creation
+        if not shots:
+            self.report(
+                {"ERROR"},
+                "No shot added. Click Add to add at least one shot before creating.",
+            )
+            return {"CANCELLED"}
+
         sq = old_path.parent.parent.name
         config = ConfigCache.get()
         blocking, warnings = _classify_shot_conflicts(
@@ -584,20 +601,25 @@ class M_PIPELINE_OT_edit_block_structure(bpy.types.Operator):
             )
             return {"CANCELLED"}
 
+        # Snapshot before create_clean's read_homefile() below -- see
+        # NOTES.md, "Multishot row list: a clean-scene reset invalidates it".
+        shot_numbers = [s.shot_number for s in shots]
+        shot_starts = [s.start_frame for s in shots]
+        kept_numbers = set(shot_numbers)
+
         try:
             if self.create_clean:
                 bpy.ops.wm.read_homefile(use_empty=True)
             elif bpy.data.filepath and bpy.data.is_dirty:
                 bpy.ops.wm.save_mainfile()
 
-            kept_numbers = {s.shot_number for s in shots}
             # Create the new file before archiving the old one, so a
             # failure here never leaves a block archived with no successor.
             dest_path = create_shot_file(
                 project_root,
                 sequence_number=int(parsed["sequence"]),
-                shot_number=[s.shot_number for s in shots],
-                timeline=[s.start_frame for s in shots] + [self.end_frame],
+                shot_number=shot_numbers,
+                timeline=shot_starts + [self.end_frame],
                 departments=list(self.required_departments),
                 description=self.description,
                 start_version=int(parsed["number"]) + 1,

@@ -25,9 +25,11 @@ def parse_asset_batch_csv(filepath: Path) -> list[dict]:
 
 
 def parse_shot_batch_csv(filepath: Path) -> list[dict]:
-    """Parse a shot batch CSV: 'sequence' and 'shot' required,
-    'frame_start'/'frame_end'/'frame_duration'/'departments'/'description'
-    optional. Raises if the header is missing a required column."""
+    """Parse a shot batch CSV: 'sequence' and 'shot' required (dash-joined
+    for a multi-shot row -- see NOTES.md, "CSV batch: multi-shot rows"),
+    'frame_start'/'frame_end'/'frame_duration'/'timeline'/'departments'/
+    'description' optional. Raises if the header is missing a required
+    column."""
     rows = read_csv(filepath)
     if rows and not ("sequence" in rows[0] and "shot" in rows[0]):
         raise PipelineError("CSV header is missing 'sequence' and/or 'shot'.")
@@ -87,11 +89,24 @@ def launch_batch_create_entry(
         Path(__file__).resolve().parent.parent / "templates" / "batch_create_entry.py"
     )
 
+    # Real (possibly namespaced) module name, for the subprocess to
+    # re-enable itself -- see NOTES.md, "CSV batch: the subprocess couldn't
+    # import itself".
+    addon_module = __package__.rsplit(".", 1)[0]
+
     fd, tmp_name = tempfile.mkstemp(suffix=".json", prefix="pipeline_batch_")
     request_path = Path(tmp_name)
     try:
         with open(fd, "w", encoding="utf-8") as f:
-            json.dump({"project_root": str(project_root), "kind": kind, "row": row}, f)
+            json.dump(
+                {
+                    "project_root": str(project_root),
+                    "kind": kind,
+                    "row": row,
+                    "addon_module": addon_module,
+                },
+                f,
+            )
     except Exception:
         request_path.unlink(missing_ok=True)
         raise

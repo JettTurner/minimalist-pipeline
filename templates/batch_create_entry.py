@@ -4,28 +4,13 @@ lib/batch.py / operators/batch_ops.py). Runs once per row in its own
 disposable Blender process, always reset to the empty template first, so
 nothing accumulates between rows and the artist's live session is untouched."""
 
+import importlib
 import json
 import sys
 from pathlib import Path
 
 import addon_utils
 import bpy
-
-# Fresh subprocess: Blender's own extension loader already makes the addon
-# importable, no manual sys.path edit needed here.
-addon_utils.enable("minimalist_pipeline", default_set=False, persistent=False)
-
-from minimalist_pipeline.lib import (
-    DEFAULT_ASSET_DEPARTMENTS,
-    DEFAULT_SHOT_DEPARTMENTS,
-    ConfigCache,
-    create_asset_file,
-    create_shot_file,
-    json_get,
-    resolve_batch_departments,
-    resolve_timeline,
-    set_daemon_active_project_root,
-)
 
 argv = sys.argv[sys.argv.index("--") + 1 :] if "--" in sys.argv else []
 request_path = Path(argv[0])
@@ -35,24 +20,30 @@ with open(request_path, "r", encoding="utf-8") as f:
 
 result = {"status": "error", "message": "Unknown error."}
 try:
+    # Real (possibly namespaced) module name from the request -- see
+    # NOTES.md, "CSV batch: the subprocess couldn't import itself".
+    addon_module = request["addon_module"]
+    addon_utils.enable(addon_module, default_set=False, persistent=False)
+    lib = importlib.import_module(f"{addon_module}.lib")
+
     bpy.ops.wm.read_homefile(use_empty=True)
 
     project_root = Path(request["project_root"])
     # Background process never loads a .blend, so get_active_project_root()
     # has nothing else to resolve the project from -- point it at the one
     # the request was made for, before anything below touches ConfigCache.
-    set_daemon_active_project_root(project_root)
+    lib.set_daemon_active_project_root(project_root)
     row = request["row"]
-    config = ConfigCache.get()
+    config = lib.ConfigCache.get()
 
     if request["kind"] == "asset":
-        valid = json_get(config, "assets_departments", DEFAULT_ASSET_DEPARTMENTS)
-        departments = resolve_batch_departments(
+        valid = lib.json_get(config, "assets_departments", lib.DEFAULT_ASSET_DEPARTMENTS)
+        departments = lib.resolve_batch_departments(
             row.get("departments", ""),
-            default=DEFAULT_ASSET_DEPARTMENTS,
+            default=lib.DEFAULT_ASSET_DEPARTMENTS,
             valid=valid,
         )
-        path = create_asset_file(
+        path = lib.create_asset_file(
             project_root,
             prefix=row["prefix"].strip(),
             name=row["name"],
@@ -60,24 +51,37 @@ try:
             description=row.get("description", "") or "",
         )
     else:
-        valid = json_get(config, "shots_departments", DEFAULT_SHOT_DEPARTMENTS)
-        departments = resolve_batch_departments(
+        valid = lib.json_get(config, "shots_departments", lib.DEFAULT_SHOT_DEPARTMENTS)
+        departments = lib.resolve_batch_departments(
             row.get("departments", ""),
-            default=DEFAULT_SHOT_DEPARTMENTS,
+            default=lib.DEFAULT_SHOT_DEPARTMENTS,
             valid=valid,
         )
-        timeline = resolve_timeline(
-            frame_start=int(row["frame_start"]) if row.get("frame_start") else None,
-            frame_end=int(row["frame_end"]) if row.get("frame_end") else None,
-            frame_duration=int(row["frame_duration"])
-            if row.get("frame_duration")
-            else None,
-            config=config,
-        )
-        path = create_shot_file(
+        # "shot"/"timeline" -- see NOTES.md, "CSV batch: multi-shot rows".
+        shot_numbers = lib.shots_in_segment(row["shot"])
+        timeline_raw = row.get("timeline", "").strip()
+        if timeline_raw:
+            timeline = lib.parse_timeline(timeline_raw)
+            if len(timeline) != len(shot_numbers) + 1:
+                raise lib.PipelineError(
+                    f"timeline has {len(timeline)} value(s), expected "
+                    f"{len(shot_numbers) + 1} for {len(shot_numbers)} "
+                    "shot(s) -- one start per shot, plus the block's end."
+                )
+        else:
+            timeline = lib.resolve_timeline(
+                frame_start=int(row["frame_start"]) if row.get("frame_start") else None,
+                frame_end=int(row["frame_end"]) if row.get("frame_end") else None,
+                frame_duration=int(row["frame_duration"])
+                if row.get("frame_duration")
+                else None,
+                shot_count=len(shot_numbers),
+                config=config,
+            )
+        path = lib.create_shot_file(
             project_root,
             sequence_number=int(row["sequence"]),
-            shot_number=int(row["shot"]),
+            shot_number=shot_numbers,
             departments=departments,
             description=row.get("description", "") or "",
             timeline=timeline,

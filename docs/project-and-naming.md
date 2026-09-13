@@ -54,7 +54,8 @@ A shot's multishot variant (several cuts sharing one file) extends this pattern 
 New assets/shots can also be created in bulk from a CSV file (Project panel's "Batch create from CSV", or the top bar menu). Each row is built in its own disposable headless Blender process — never the current session — so nothing accumulates between rows (no leftover collections from a previous one) and the artist's own work is never reset or touched. Rows are processed strictly one at a time, never in parallel.
 
 - **Assets**: `prefix`, `name` required; `departments`, `description` optional.
-- **Shots**: `sequence`, `shot` required; `frame_start`/`frame_end`/`frame_duration`, `departments`, `description` optional (`frame_end` takes precedence over `frame_duration` if both are given; neither touches the scene's own default frame range if omitted).
+- **Shots**: `sequence`, `shot` required; `frame_start`/`frame_end`/`frame_duration`/`timeline`, `departments`, `description` optional. `shot` can also be a dash-joined block (e.g. `"030-035-040"`, in any order, any digit padding — `"3-10-020"` is just as valid) to create a multi-shot in one row — its shots are then spread evenly across the block instead of landing on one single frame.
+  - **Priority when more than one frame column is filled in** (only the first that applies is used, the rest are ignored for that row): `timeline` (exact, e.g. `"1001-1021-1051-1076"` — one start per shot plus the block's end) > `frame_end` > `frame_duration` > `frame_start` alone (config's `default_frame_start` if even that's empty). `frame_end`/`frame_duration` set the block's own end for the auto-spread; without either, it defaults to 20 frames per shot past `frame_start` — never past an explicit `frame_end` though.
 - `departments`: comma-separated department names. Falls back to the project's default set if the column is empty/missing; any name not found in the project's actually configured departments is skipped and logged as a warning — never blocks the row.
 - A row matching an asset/shot that already exists (same prefix+name, or same sequence+shot) is silently skipped — batch creation never overwrites.
 
@@ -67,7 +68,7 @@ Written under a lock and atomically (temp file then rename), like every other pi
 ```json
 {
   "project_name": "my_project",
-  "pipeline_addon_version": "1.0.3",
+  "pipeline_addon_version": "1.0.4",
   "blender_version": "(4, 2, 0)",
   "resolution": {"x": 1920, "y": 1080},
   "default_fps": 30,

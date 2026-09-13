@@ -44,6 +44,87 @@ The spec is `multishot_spec_v2.md` (§ references below point there).
   isn't checkable by the tool, so the warning is the only real barrier
   against a block being used to over-scope work.
 
+### CSV batch: multi-shot rows
+
+The CSV batch importer (`lib/batch.py`, `operators/batch_ops.py`,
+`templates/batch_create_entry.py`) originally only ever built mono-shot
+files: `shot` went through a bare `int()` in three places (the operator's
+own duplicate/exists check, the folder-name preview, and the headless entry
+script's `create_shot_file()` call), so there was no way to produce an
+actual multi-shot block from a CSV at all — three separate rows for
+"030"/"035"/"040" just made three separate mono-shot files, never one
+`sh030-035-040` block.
+
+Fixed by accepting the exact same dash-joined convention the naming layer
+already uses (`shots_in_segment()` / `format_shot_segment()` — see
+"Naming" above): `shot` can be `"045"` or `"030-035-040"`, parsed with
+`shots_in_segment()` everywhere `int(row["shot"])` used to be, and the
+folder-name/exists-check path now builds its label through
+`format_shot_segment()` too instead of its own separate zero-padding
+one-liner — one formatting path for both cases instead of two that could
+drift apart.
+
+The one real design question was **per-shot timing**: the interactive
+dialog gets an explicit start frame per row, but a flat CSV row only ever
+had one `frame_start`/`frame_end`/`frame_duration` for the whole line.
+Passing a 2-element `[start, end]` timeline through unchanged for an N-shot
+block would hit `build_shot_scene()`'s own defensive clamp (`timeline[i] if
+i < len(timeline) else timeline[-1]`) — harmless (no crash), but every shot
+past the first would land its marker on the *end* frame instead of getting
+its own cut point, silently wrong rather than merely incomplete. Rejected:
+a new per-shot column (a second dash-joined list the row author would have
+to keep in sync, by hand, with the `shot` column's own count) — real power
+for a case (CSV-authored blocks) that's already the coarser, less hands-on
+path by choice. Instead `resolve_timeline()` takes a `shot_count` and, for
+`shot_count > 1`, spreads shots evenly across `[frame_start, end]`.
+
+First pass got this half right and shipped with a real bug, caught by a
+"does it respect frame_end?" question before it went further: it spread
+shots at the fixed `DEFAULT_MULTISHOT_STEP` unconditionally, so an
+explicit, tight `frame_end` (e.g. 3 shots asked to fit inside 30 frames)
+got silently overshot -- the step never looked at what `end` actually was.
+Fixed by deriving the step from the resolved span instead of the constant:
+`step = max(1, (end - start) // shot_count)`, and only when *nothing*
+constrains `end` (no `frame_end`/`frame_duration` given) does `end` itself
+default to `start + DEFAULT_MULTISHOT_STEP * shot_count` -- which is also
+why the formula still reduces to exactly `DEFAULT_MULTISHOT_STEP` spacing
+in that case (the constant now only ever decides the *default span*, never
+the step directly), the same spacing `M_PIPELINE_OT_add_multishot_item`'s
+own "add row" default already uses in the interactive dialog, so a block
+built by hand and one built from a CSV with no frame columns still land on
+the same convention. A span too tight to fit `shot_count` shots at all
+(hand-authored CSV only) still can't avoid some overshoot with a minimum
+1-frame step -- accepted as a degenerate-input edge case, not something
+worth a headless script raising over. `shot_count=1` (the default) keeps
+every existing call and every existing single-shot CSV row byte-for-byte
+unchanged.
+
+`shot` itself has no format beyond "dash-joined, each part `int()`-able" --
+`"40"`, `"0040"`, and `"3-10-020"` all parse the same as `[40]`/`[40]`/
+`[3, 10, 20]` (`shots_in_segment()` is a bare `int()` per part, Python
+doesn't treat a leading zero as octal). No sorting, no zero-padding, no
+fixed order required from whoever writes the CSV -- `format_shot_segment()`
+normalizes all of that afterward, for the file/folder name only. The order
+given in `shot` is kept as the block's own shot order for marker/timing
+purposes (first listed gets the earliest start frame), independent of
+whatever order the name ends up sorted into.
+
+**`timeline`** (optional column, e.g. `"1001-1021-1051-1076"`) is the escape
+hatch for exact per-shot timing: the block's whole timeline spelled out by
+hand, same `[start_0, ..., end]` shape `create_shot_file()` already takes,
+parsed by `parse_timeline()` and overriding `frame_start`/`frame_end`/
+`frame_duration` entirely when given. Considered a duration list instead
+(`"20-30-25"` next to a single `frame_start`) — rejected: it still needs
+the reader (and `resolve_timeline`) to do the cumulative-sum arithmetic to
+get absolute frames, where this column already *is* the answer, one
+column, no new interpretation step. The auto-spread path above stays as
+the no-typing default; this one is only for a row that actually needs its
+own numbers. Named `timeline`, not `frame_range` as first written --
+`operators/farm_ops.py`/`farm/dispatch.py` already use `frame_range` for
+an unrelated concept (a farm job's own frame override), and grepping one
+term for two different things is exactly the kind of mixup worth a rename
+to avoid, not just a comment.
+
 ### Block size — no upper bound, deliberately
 
 No enforced maximum on how many shots a block can cover. Raised while writing the spec: what stops someone folding an entire sequence into one block "because it's simpler" — the exact monolith the naming convention would dress up as *structured* (`sq040_sh010-...-200_v001.blend` reads clean even at 20 shots) while being the same one-file-does-everything failure mode the addon exists to prevent. Split-at-render makes a huge block technically painless (isolated per-shot failure, per-shot output), which removes the one purely technical brake that might otherwise have discouraged it.
@@ -818,6 +899,29 @@ longer show up on "Reload Scripts" during dev, only on a full Blender
 restart -- accepted on purpose, not worth the loop's complexity for a
 no-op.
 
+**`prefs.user_name` doesn't reliably survive `unregister()`/`register()`.**
+Blender's `AddonPreferences` storage lives on the `Addon` entry in
+`bpy.context.preferences.addons[bl_idname]` -- and that entry itself, not
+just the RNA class, gets torn down and rebuilt on a full disable/re-enable
+(an extension update, "Reload Scripts" in some configurations, or manually
+toggling it off and on) unless the values were flushed to `userpref.blend`
+in between (an explicit "Save Preferences", or auto-save-on-exit). Reported
+as `user_name` silently reverting to a fresh `random_display_name()` after
+such a cycle even though it had already been set -- `_seed_user_name()`'s
+own `if not prefs.user_name` check was working exactly as designed, it's
+just that the value it was checking had already been wiped out from under
+it by the time `register()` ran, same root problem `save_project_data()`/
+`load_project_data()` already exist to work around for
+`active_project_root`/`opened_projects` (see the JSON backup file, not
+Blender's own prefs storage, note above). Fixed the same way: `user_name`
+now rides along in that same backup JSON, written whenever
+`save_project_data()` already runs (every project-list change, plus
+`unregister()`) and restored by `load_project_data()` -- but only into an
+still-empty `prefs.user_name`, so Blender's own storage stays authoritative
+whenever it did survive intact, and `_seed_user_name()` only ever falls
+back to a random placeholder when neither source has a name at all (a
+genuine first-ever run).
+
 ## Lock staleness: 3x the heartbeat, not 1x
 
 `LOCK_STALE_SECONDS = 90` (`lib/core.py`) is deliberately 3x the 30s
@@ -883,6 +987,104 @@ together by `toggle_entry_task()`, but nothing stops `done` being set some
 other way without them. Both fixed to fall back the same way their
 already-guarded sibling does: no crash, jump buttons/timestamp just read
 as unavailable.
+
+## Edit-entry dialog: a stored department can outlive its own enum
+
+`M_PIPELINE_OT_edit_entry.invoke()` (`operators/tracking_ops.py`) seeds
+`self.department` straight from the stored entry (`e.get("department") or
+"NONE"`) into a dynamic `EnumProperty` (`tracked_department_items`, §
+"Department filter" above) whose valid choices are *this project's current*
+department list. Nothing guarantees the two stay in sync: an entry tagged
+`"lighting"` before that department was renamed or dropped from the
+project's config -- or just hand-written/imported data that never went
+through the dropdown -- makes the assignment raise `TypeError` (`bpy_struct:
+item.attr = val: enum "lighting" not found in (...)`), which crashes
+`invoke()` before the dialog even opens, taking down whatever operator
+called it (`M_PIPELINE_OT_generic_entry_button`'s Ctrl+click, in
+particular). Same failure shape as "Entries: two fields" above: stored data
+drifting out of sync with a schema that can change over the file's
+lifetime. Fixed the same way `shot_tag` and `referenced_version`, a few
+lines further down in the same `invoke()`, already handle their own version
+of this (stored value no longer among the live choices) -- wrap the
+assignment and fall back to `"NONE"` instead of propagating the exception.
+
+## Multishot row list: disabling a button isn't a guard
+
+`_draw_shot_list()`'s Remove button (`operators/shot_ops.py`, shared by
+`M_PIPELINE_OT_create_shot` and `M_PIPELINE_OT_edit_block_structure`) sets
+`enabled = len(shots) > 1` so the last row can't be clicked away -- but that
+only disables the button for a mouse click. Shift+R (Repeat Last) and the
+F9 redo panel re-run `M_PIPELINE_OT_remove_multishot_item` directly with
+its last-used `index`, and neither looks at button state, only at the
+operator's own `poll()` (there wasn't one) -- so removing down to the last
+row then repeating once more would empty `shots_list_creation`. Found while
+chasing a reported "No shot number given" (see next section for the actual
+cause that time), but a real latent gap in its own right: any caller
+reaching `shot_number=[]` hits the same raw `PipelineError` from
+`create_shot_file()`, since only `M_PIPELINE_OT_create_shot.execute()` (not
+`edit_block_structure.execute()`) had its own friendlier "click Add" check
+in front of it. Fixed at both ends: `M_PIPELINE_OT_remove_multishot_item`
+gets a real `poll()` (the actual state guard, holding regardless of
+invocation path), and `edit_block_structure.execute()` gets the same early
+check `create_shot` already had.
+
+## Multishot row list, take two: a clean-scene reset invalidates it
+
+The actual cause of that "No shot number given" report: both operators
+above read `shots = context.window_manager.shots_list_creation` once at
+the top of `execute()`, then -- when "Start with a new clean scene" is
+ticked -- call `bpy.ops.wm.read_homefile(use_empty=True)` *before* finally
+consuming `shots` to build `shot_number`/`timeline` for `create_shot_file()`.
+`read_homefile()` replaces `bpy.data` wholesale, including the
+`WindowManager` datablock itself, so the already-fetched `shots` reference
+is left bound to a datablock that no longer backs the live window
+manager -- it reads back empty from then on, with no exception to flag it.
+Unticking the checkbox "fixed" it, which was the tell: without
+`read_homefile()`/`save_mainfile()` in between, the same reference is still
+live when it's read. Fixed by snapshotting `shot_numbers`/`shot_starts`
+into plain lists *before* the `create_clean`/dirty-save branch in both
+`execute()`s, so the values used to build the new file no longer depend on
+`shots` surviving whatever the "start clean" branch does to `bpy.data`.
+
+## `_draw_timeline_warnings`: a trailing comma turned a string into a 1-tuple
+
+`text = ("Inconsistent timeline ! ...",)` (`operators/shot_ops.py`) --
+the trailing comma makes this a one-element tuple, not a string, so
+`text_to_lines(warning.box(), text=text, ...)` crashed the whole "New
+shot"/"Edit block structure" dialog's `draw()` with `AttributeError: 'tuple'
+object has no attribute 'split'` the moment shot numbers or start frames
+came out unordered (the exact case this warning exists to flag). The
+sibling warning three lines down (`"Invalid numbers! ..."`) is a plain
+string and never had the problem -- just a stray comma copy-pasted from a
+one-line-per-item list elsewhere. Fixed by dropping the comma.
+
+## CSV batch: the subprocess couldn't import itself
+
+Every batch row failed with a bare "unknown error", no matter the row's
+content -- `templates/batch_create_entry.py` hardcoded `addon_utils.enable
+("minimalist_pipeline", ...)` and `from minimalist_pipeline.lib import
+(...)`, but a real Extensions install's module name is namespaced (found
+via a real headless Blender run: `bl_ext.vscode_development.
+minimalist_pipeline` here, whatever the repo id is elsewhere) -- so both
+calls raised `ModuleNotFoundError` before the script's own `try` even
+started, its result JSON never got written, and `read_batch_result()` fell
+back to reading the *request* JSON still sitting there (no `"message"`
+key), which is why `batch_ops.py`'s `result.get("message", "unknown
+error")` produced that exact generic string instead of a real one.
+
+Fixed two ways: `launch_batch_create_entry()` (`lib/batch.py`) now derives
+its own real module name the same way `get_backup_filepath()` already does
+(`__package__.rsplit(".", 1)[0]`) and threads it through the request JSON;
+the entry script does `importlib.import_module(f"{addon_module}.lib")`
+instead of a static `from minimalist_pipeline.lib import ...`. Just as
+important: the `addon_utils.enable()`/import step moved *inside* the
+script's own `try`, which used to wrap everything except that -- so any
+future failure there now writes back a real message instead of silently
+leaving the stale request JSON in place. Verified for real (register the
+addon, run the entry script against a throwaway project, inspect the
+resulting `.blend`'s camera markers) rather than by re-reading the code --
+see [[no-live-blender-verify-via-stubs]], headless Blender turned out to
+be reachable from here after all.
 
 <!-- Next feature with rationale worth keeping gets its own "## " section
      here, same shape as the ones above: what was tried, what was

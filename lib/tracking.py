@@ -214,7 +214,9 @@ class WorkTimeCache:
         except OSError:
             mtime = -1.0  # still worth checking archives, not just 0.0
         if mtime != cls._mtime:
-            archived = ConfigCache.get_path("logs_archives").glob("sessions_log_*.jsonl")
+            archived = ConfigCache.get_path("logs_archives").glob(
+                "sessions_log_*.jsonl"
+            )
             cls._cache = cls._scan([log_path, *archived])
             cls._mtime = mtime
         return cls._cache.get(str(Path(folder)), 0.0)
@@ -1252,7 +1254,12 @@ def check_library_update():
     if update:
         action = PipelineAction(
             title="New stable version available",
-            message="\n".join([f"{old.filepath} -> {new}" for old, new in update]),
+            message="\n".join(
+                [
+                    f"{Path(old.filepath).stem} -> {Path(new).stem}"
+                    for old, new in update
+                ]
+            ),
             severity="warning",
             choices=[
                 ("Not now", lambda: None, "Keep the currently linked versions."),
@@ -1360,7 +1367,8 @@ def find_linked_by(project_root: Path, filepath: Path) -> list[Path]:
         # A folder can hold many .wipmeta (one per version) -- collect into
         # a set, or the same linking asset/shot shows up once per version.
         if any(
-            link.get("file") and to_absolute(link["file"], project_root).parent == asset_dir
+            link.get("file")
+            and to_absolute(link["file"], project_root).parent == asset_dir
             for link in data.get("linked", [])
         ):
             linkers.add(meta_path.parent.parent)
